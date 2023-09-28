@@ -1,18 +1,19 @@
 use clap::Parser;
-use trash_db::Cli;
 use trash_db::Commands;
+use trash_db::{Cli, KvStore};
 
 fn main() {
     let cli = Cli::parse();
+    let mut kvs = KvStore::new();
     match &cli.command {
         Commands::Get { key } => {
-            println!("getting {key}")
+            unimplemented!("unimplemented")
         }
         Commands::Set { key, value } => {
-            println!("setting {key}: {value}")
+            unimplemented!("unimplemented")
         }
         Commands::Rm { key } => {
-            println!("removing {key}")
+            unimplemented!("unimplemented")
         }
     }
 }
