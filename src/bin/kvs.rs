@@ -1,8 +1,8 @@
 use std::process::exit;
 
 use clap::Parser;
-use trash_db::Commands;
 use trash_db::{Cli, KvStore, Result};
+use trash_db::{Commands, KvError};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -11,7 +11,7 @@ fn main() -> Result<()> {
         Commands::Get { key } => match kvs.get(key.to_owned())? {
             Some(val) => println!("{val}"),
             None => {
-                println!("Key not found");
+                println!("{}", KvError::KeyNotFound);
                 exit(0)
             }
         },
