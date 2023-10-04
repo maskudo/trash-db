@@ -78,8 +78,8 @@ impl KvStore {
     }
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
         let file = OpenOptions::new()
-            .write(true)
             .create(true)
+            .append(true)
             .open(&self.path)?;
         let mut writer = BufWriter::new(file);
         self.store.insert(key.clone(), value.clone());
@@ -106,12 +106,15 @@ impl KvStore {
             }
         };
         let file = OpenOptions::new()
-            .write(true)
+            .append(true)
             .create(true)
             .open(&self.path)?;
         let mut writer = BufWriter::new(file);
-        let content = serde_json::to_string(&self.store)?;
-        write!(writer, "{}", content)?;
+        let key_bytes = key.as_bytes();
+        let key_length = key_bytes.len() as u32;
+        writer.write_all(&key_length.to_le_bytes())?;
+        writer.write_all(&0u32.to_le_bytes())?;
+        writer.write_all(key_bytes)?;
         Ok(())
     }
     pub fn open(path: &Path) -> Result<Self> {
@@ -138,6 +141,10 @@ impl KvStore {
                         .read_exact(&mut val_bytes)?;
                     let key = String::from_utf8(key_bytes)?;
                     let val = String::from_utf8(val_bytes)?;
+                    if value_length == 0 {
+                        let _ = hashmap.remove(&key);
+                        continue;
+                    }
                     hashmap.insert(key, val);
                 }
 
