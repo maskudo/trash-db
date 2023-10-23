@@ -5,7 +5,7 @@ use std::{
     error::Error,
     fmt::Display,
     fs::{File, OpenOptions},
-    io::{BufReader, BufWriter, Read, Write},
+    io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
 
@@ -51,10 +51,8 @@ impl Display for KvError {
 }
 
 // # TODO : Compaction
-#[derive(Serialize, Deserialize)]
 pub struct KvStore {
-    store: HashMap<String, String>,
-    #[serde(skip_serializing)]
+    store: HashMap<String, u64>,
     path: PathBuf,
 }
 
@@ -82,7 +80,10 @@ impl KvStore {
             .append(true)
             .open(&self.path)?;
         let mut writer = BufWriter::new(file);
-        self.store.insert(key.clone(), value.clone());
+        let current_pos = writer
+            .seek(SeekFrom::End(0))
+            .expect("Error getting current writer position");
+        self.store.insert(key.clone(), current_pos);
         let key_bytes = key.as_bytes();
         let value_bytes = value.as_bytes();
         let key_length = key_bytes.len() as u32;
@@ -93,9 +94,35 @@ impl KvStore {
         writer.write_all(value_bytes)?;
         Ok(())
     }
+
     pub fn get(&self, key: String) -> Result<Option<String>> {
-        Ok(self.store.get(&key).cloned())
+        let pos = self.store.get(&key);
+        match pos {
+            None => Ok(None),
+            Some(&pos) => {
+                let file = File::open(&self.path)?;
+                let mut file_reader = BufReader::new(file);
+                file_reader.seek(SeekFrom::Start(pos))?;
+                let chunk = &mut [0u8; 8];
+                file_reader.borrow_mut().take(4 + 4).read_exact(chunk)?;
+                let key_length = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                let value_length = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+                let mut key_bytes = vec![0u8; key_length as usize];
+                let mut val_bytes = vec![0u8; value_length as usize];
+                file_reader
+                    .borrow_mut()
+                    .take(key_length as u64)
+                    .read_exact(&mut key_bytes)?;
+                file_reader
+                    .borrow_mut()
+                    .take(value_length as u64)
+                    .read_exact(&mut val_bytes)?;
+                let val = String::from_utf8(val_bytes)?;
+                Ok(Some(val))
+            }
+        }
     }
+
     pub fn remove(&mut self, key: String) -> Result<()> {
         let res = self.store.remove(&key);
         match res {
@@ -117,16 +144,21 @@ impl KvStore {
         writer.write_all(key_bytes)?;
         Ok(())
     }
+
     pub fn open(path: &Path) -> Result<Self> {
         let mut pathbuf = PathBuf::from(path);
         pathbuf.push("store");
         let file = File::open(&pathbuf);
-        let mut hashmap: HashMap<String, String> = HashMap::default();
+        let mut hashmap: HashMap<String, u64> = HashMap::default();
         let content = match file {
             Ok(file) => {
                 let mut file_reader = BufReader::new(file);
                 let chunk = &mut [0u8; 8];
                 while let Ok(_) = file_reader.borrow_mut().take(4 + 4).read_exact(chunk) {
+                    let current_pos = file_reader
+                        .seek(SeekFrom::Current(0))
+                        .expect("Error getting current position")
+                        - 8;
                     let key_length = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
                     let value_length = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
                     let mut key_bytes = vec![0u8; key_length as usize];
@@ -140,12 +172,11 @@ impl KvStore {
                         .take(value_length as u64)
                         .read_exact(&mut val_bytes)?;
                     let key = String::from_utf8(key_bytes)?;
-                    let val = String::from_utf8(val_bytes)?;
                     if value_length == 0 {
                         let _ = hashmap.remove(&key);
                         continue;
                     }
-                    hashmap.insert(key, val);
+                    hashmap.insert(key, current_pos);
                 }
 
                 hashmap
