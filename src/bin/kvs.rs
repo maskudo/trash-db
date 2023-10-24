@@ -6,7 +6,7 @@ use trash_db::{Commands, KvError};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let mut kvs = KvStore::new();
+    let mut kvs = KvStore::default();
     match &cli.command {
         Commands::Get { key } => match kvs.get(key.to_owned())? {
             Some(val) => println!("{val}"),

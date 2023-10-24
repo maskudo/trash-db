@@ -54,32 +54,23 @@ impl Display for KvError {
 pub struct KvStore {
     store: HashMap<String, u64>,
     path: PathBuf,
+    writer: BufWriter<File>,
 }
 
 impl Default for KvStore {
     fn default() -> Self {
-        Self::new()
+        Self::open(
+            env::current_dir()
+                .expect("Error getting current dir")
+                .as_path(),
+        )
+        .expect("Error creating KvStore")
     }
 }
 
 impl KvStore {
-    pub fn new() -> Self {
-        let current_dir = env::current_dir().expect("Error getting current dir");
-        let res = Self::open(&current_dir);
-        match res {
-            Ok(store) => store,
-            Err(_) => KvStore {
-                store: HashMap::default(),
-                path: PathBuf::from("./store"),
-            },
-        }
-    }
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
-        let mut writer = BufWriter::new(file);
+        let writer = &mut self.writer;
         let current_pos = writer
             .seek(SeekFrom::End(0))
             .expect("Error getting current writer position");
@@ -92,6 +83,7 @@ impl KvStore {
         writer.write_all(&value_length.to_le_bytes())?;
         writer.write_all(key_bytes)?;
         writer.write_all(value_bytes)?;
+        writer.flush()?;
         Ok(())
     }
 
@@ -132,16 +124,13 @@ impl KvStore {
                 return Err(From::from(""));
             }
         };
-        let file = OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(&self.path)?;
-        let mut writer = BufWriter::new(file);
+        let writer = &mut self.writer;
         let key_bytes = key.as_bytes();
         let key_length = key_bytes.len() as u32;
         writer.write_all(&key_length.to_le_bytes())?;
         writer.write_all(&0u32.to_le_bytes())?;
         writer.write_all(key_bytes)?;
+        writer.flush()?;
         Ok(())
     }
 
@@ -183,10 +172,16 @@ impl KvStore {
             }
             Err(_) => HashMap::default(),
         };
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(pathbuf.as_path())?;
+        let writer = BufWriter::new(file);
 
         Ok(KvStore {
             store: content,
             path: pathbuf,
+            writer,
         })
     }
 }
