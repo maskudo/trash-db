@@ -20,7 +20,7 @@ pub struct Cli {
     pub command: Commands,
 }
 
-#[derive(Subcommand, Serialize, Deserialize)]
+#[derive(Subcommand, Serialize, Deserialize, Clone, Debug)]
 pub enum Commands {
     Get {
         #[clap(value_parser)]
@@ -51,10 +51,22 @@ impl Display for KvError {
 }
 
 // # TODO : Compaction
+#[derive(Debug)]
 pub struct KvStore {
-    store: HashMap<String, u64>,
+    store: HashMap<String, CommandPos>,
     path: PathBuf,
     writer: BufWriter<File>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CommandPos {
+    pub pos: u64,
+    pub len: u64,
+}
+impl CommandPos {
+    fn new(pos: u64, len: u64) -> Self {
+        CommandPos { pos, len }
+    }
 }
 
 impl Default for KvStore {
@@ -74,7 +86,6 @@ impl KvStore {
         let current_pos = writer
             .seek(SeekFrom::End(0))
             .expect("Error getting current writer position");
-        self.store.insert(key.clone(), current_pos);
         let key_bytes = key.as_bytes();
         let value_bytes = value.as_bytes();
         let key_length = key_bytes.len() as u32;
@@ -84,6 +95,10 @@ impl KvStore {
         writer.write_all(key_bytes)?;
         writer.write_all(value_bytes)?;
         writer.flush()?;
+        self.store.insert(
+            key.clone(),
+            CommandPos::new(current_pos, key_length as u64 + value_length as u64 + 8u64),
+        );
         Ok(())
     }
 
@@ -94,7 +109,7 @@ impl KvStore {
             Some(&pos) => {
                 let file = File::open(&self.path)?;
                 let mut file_reader = BufReader::new(file);
-                file_reader.seek(SeekFrom::Start(pos))?;
+                file_reader.seek(SeekFrom::Start(pos.pos))?;
                 let chunk = &mut [0u8; 8];
                 file_reader.borrow_mut().take(4 + 4).read_exact(chunk)?;
                 let key_length = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
@@ -116,14 +131,10 @@ impl KvStore {
     }
 
     pub fn remove(&mut self, key: String) -> Result<()> {
-        let res = self.store.remove(&key);
-        match res {
-            Some(_) => {}
-            None => {
-                println!("{}", KvError::KeyNotFound);
-                return Err(From::from(""));
-            }
-        };
+        if !self.store.contains_key(&key) {
+            println!("{}", KvError::KeyNotFound);
+            return Err(From::from(""));
+        }
         let writer = &mut self.writer;
         let key_bytes = key.as_bytes();
         let key_length = key_bytes.len() as u32;
@@ -131,6 +142,7 @@ impl KvStore {
         writer.write_all(&0u32.to_le_bytes())?;
         writer.write_all(key_bytes)?;
         writer.flush()?;
+        self.store.remove(&key);
         Ok(())
     }
 
@@ -138,7 +150,7 @@ impl KvStore {
         let mut pathbuf = PathBuf::from(path);
         pathbuf.push("store");
         let file = File::open(&pathbuf);
-        let mut hashmap: HashMap<String, u64> = HashMap::default();
+        let mut hashmap: HashMap<String, CommandPos> = HashMap::default();
         let content = match file {
             Ok(file) => {
                 let mut file_reader = BufReader::new(file);
@@ -165,7 +177,13 @@ impl KvStore {
                         let _ = hashmap.remove(&key);
                         continue;
                     }
-                    hashmap.insert(key, current_pos);
+                    hashmap.insert(
+                        key,
+                        CommandPos::new(
+                            current_pos,
+                            8u64 + key_length as u64 + value_length as u64,
+                        ),
+                    );
                 }
 
                 hashmap
