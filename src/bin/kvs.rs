@@ -1,7 +1,7 @@
 use std::process::exit;
 
 use clap::Parser;
-use trash_db::{Cli, KvStore, Result};
+use trash_db::{Cli, KvStore, KvsEngine, Result};
 use trash_db::{Commands, KvError};
 
 fn main() -> Result<()> {

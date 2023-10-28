@@ -39,6 +39,12 @@ pub enum Commands {
     },
 }
 
+pub trait KvsEngine {
+    fn set(&mut self, key: String, value: String) -> Result<()>;
+    fn get(&mut self, key: String) -> Result<Option<String>>;
+    fn remove(&mut self, key: String) -> Result<()>;
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum KvError {
     KeyNotFound,
@@ -82,8 +88,8 @@ impl Default for KvStore {
     }
 }
 
-impl KvStore {
-    pub fn set(&mut self, key: String, value: String) -> Result<()> {
+impl KvsEngine for KvStore {
+    fn set(&mut self, key: String, value: String) -> Result<()> {
         let writer = &mut self.writer;
         let current_pos = writer
             .seek(SeekFrom::End(0))
@@ -110,7 +116,7 @@ impl KvStore {
         Ok(())
     }
 
-    pub fn get(&self, key: String) -> Result<Option<String>> {
+    fn get(&mut self, key: String) -> Result<Option<String>> {
         let pos = self.store.get(&key);
         match pos {
             None => Ok(None),
@@ -138,7 +144,7 @@ impl KvStore {
         }
     }
 
-    pub fn remove(&mut self, key: String) -> Result<()> {
+    fn remove(&mut self, key: String) -> Result<()> {
         let value = self.store.get(&key);
         if value.is_none() {
             println!("{}", KvError::KeyNotFound);
@@ -158,7 +164,9 @@ impl KvStore {
         self.store.remove(&key);
         Ok(())
     }
+}
 
+impl KvStore {
     pub fn open(path: &Path) -> Result<Self> {
         let mut pathbuf = PathBuf::from(path);
         pathbuf.push("store");
