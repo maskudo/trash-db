@@ -57,6 +57,12 @@ impl Display for KvError {
     }
 }
 
+impl Error for KvError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self)
+    }
+}
+
 // # TODO : Compaction
 #[derive(Debug)]
 pub struct KvStore {
@@ -148,7 +154,7 @@ impl KvsEngine for KvStore {
         let value = self.store.get(&key);
         if value.is_none() {
             println!("{}", KvError::KeyNotFound);
-            return Err(From::from(""));
+            return Err(From::from(KvError::KeyNotFound));
         }
         let writer = &mut self.writer;
         let key_bytes = key.as_bytes();
