@@ -1,5 +1,8 @@
 use tempfile::TempDir;
-use trash_db::{KvStore, KvsEngine, Result};
+use trash_db::{
+    engines::{kvstore::KvStore, KvsEngine},
+    Result,
+};
 use walkdir::WalkDir;
 
 // Should get previously stored value
@@ -7,7 +10,6 @@ use walkdir::WalkDir;
 fn get_stored_value() -> Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut store = KvStore::open(temp_dir.path())?;
-
     store.set("key1".to_owned(), "value1".to_owned())?;
     store.set("key2".to_owned(), "value2".to_owned())?;
 
