@@ -1,4 +1,5 @@
 use std::{error::Error, fmt::Display};
+pub mod commands;
 pub mod engines;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
