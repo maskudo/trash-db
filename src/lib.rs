@@ -2,6 +2,7 @@ use std::{error::Error, fmt::Display};
 pub mod commands;
 pub mod engines;
 
+pub const MESSAGE_SIZE: usize = 512;
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 #[derive(Clone, Copy, Debug)]

@@ -101,7 +101,7 @@ impl KvsEngine for KvStore {
     fn remove(&mut self, key: String) -> Result<()> {
         let value = self.store.get(&key);
         if value.is_none() {
-            println!("{}", KvError::KeyNotFound);
+            // println!("{}", KvError::KeyNotFound);
             return Err(From::from(KvError::KeyNotFound));
         }
         let writer = &mut self.writer;

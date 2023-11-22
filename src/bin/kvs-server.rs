@@ -1,16 +1,18 @@
 use std::{
     error::Error,
-    io::{Read, Write},
+    fs::{self, OpenOptions},
+    io::{self, Read, Write},
     net::{TcpListener, TcpStream},
     str::from_utf8,
 };
 
 use clap::{Parser, ValueEnum};
 use log::info;
+use serde::{Deserialize, Serialize};
 use trash_db::{
     commands::{KvsCommands, KvsResponse},
     engines::{kvstore::KvStore, KvsEngine},
-    KvError, Result,
+    KvError, Result, MESSAGE_SIZE,
 };
 
 #[derive(Parser, Debug)]
@@ -21,7 +23,7 @@ struct Cli {
     #[arg(value_enum, long)]
     engine: Option<Engine>,
 }
-#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 enum Engine {
     Kvs,
     Sled,
@@ -33,6 +35,41 @@ fn main() -> std::result::Result<(), Box<dyn Error>> {
         .init();
     let cli = Cli::parse();
     let engine = cli.engine;
+    let current_engine = get_current_engine()?;
+    let engine = match (current_engine, engine) {
+        (Some(cur_engine), None) => cur_engine,
+        (Some(cur_engine), Some(engine)) => {
+            if cur_engine != engine {
+                panic!(
+                    "Incorrect engine selection. Current engine: {:?}",
+                    cur_engine
+                );
+            }
+            engine
+        }
+        (None, Some(engine)) => {
+            let content = serde_json::to_string(&engine)?;
+            let mut file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(".engine")?;
+            file.write(content.as_bytes())?;
+            engine
+        }
+        (None, None) => {
+            let engine = Engine::Kvs;
+            let content = serde_json::to_string(&engine)?;
+            let mut file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(".engine")?;
+            file.write(content.as_bytes())?;
+            engine
+        }
+    };
+    if engine == Engine::Sled {
+        unimplemented!("Sled not implemented");
+    }
     let addr = cli.addr;
     info!("kvs-server {}", env!("CARGO_PKG_VERSION"));
     info!("Storage engine: {:?}", engine);
@@ -41,7 +78,9 @@ fn main() -> std::result::Result<(), Box<dyn Error>> {
     let mut kvs = KvStore::default();
     for stream in listener.incoming() {
         let mut stream = stream.unwrap();
+        info!("Connection established");
         let command = get_command(&mut stream)?;
+        info!("Command: {:?}", command);
         let response = match command {
             KvsCommands::Get { key } => match kvs.get(key.to_owned())? {
                 Some(val) => KvsResponse::Ok(Some(val)),
@@ -60,10 +99,10 @@ fn main() -> std::result::Result<(), Box<dyn Error>> {
             .write_all(serde_json::to_string(&response).unwrap().as_bytes())
             .unwrap();
         stream.flush().unwrap();
+        stream.shutdown(std::net::Shutdown::Both)?;
     }
     Ok(())
 }
-const MESSAGE_SIZE: usize = 512;
 fn get_command(stream: &mut TcpStream) -> Result<KvsCommands> {
     let mut buffer = vec![];
     let mut bytes = [0; MESSAGE_SIZE];
@@ -78,4 +117,18 @@ fn get_command(stream: &mut TcpStream) -> Result<KvsCommands> {
     let content = from_utf8(&mut buffer).unwrap().trim_matches(char::from(0));
     let command: KvsCommands = serde_json::from_str(content).unwrap();
     Ok(command)
+}
+
+fn get_current_engine() -> Result<Option<Engine>> {
+    let engine = fs::read_to_string(".engine");
+    let engine = match engine {
+        Ok(engine) => engine,
+        Err(e) => match e.kind() {
+            io::ErrorKind::NotFound => return Ok(None),
+            _ => return Err(Box::new(e)),
+        },
+    };
+    let engine: Engine =
+        serde_json::from_str(&engine).map_err(|val| (format!("Corrupted engine value {}", val)))?;
+    Ok(Some(engine))
 }
