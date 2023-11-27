@@ -294,6 +294,11 @@ fn cli_access_server(engine: &str, addr: &str) {
     sender.send(()).unwrap();
     handle.join().unwrap();
 
+    // weird sled behaviour not closing properly
+    // see: https://github.com/pingcap/talent-plan/issues/458
+    // see: https://github.com/spacejam/sled/issues/1234
+    // set timeout to let it close properly
+    thread::sleep(Duration::from_millis(100));
     // Reopen and check value
     let (sender, receiver) = mpsc::sync_channel(0);
     let mut server = Command::cargo_bin("kvs-server").unwrap();

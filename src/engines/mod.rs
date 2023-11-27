@@ -1,6 +1,7 @@
 use crate::Result;
 
 pub mod kvstore;
+pub mod sled;
 
 pub trait KvsEngine {
     fn set(&mut self, key: String, value: String) -> Result<()>;
