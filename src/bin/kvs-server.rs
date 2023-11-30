@@ -12,7 +12,7 @@ use log::info;
 use serde::{Deserialize, Serialize};
 use trash_db::{
     commands::{KvsCommands, KvsResponse},
-    engines::{kvstore::KvStore, KvsEngine},
+    engines::{kvstore::KvStore, sled::SledKvsEngine, KvsEngine},
     KvError, Result, MESSAGE_SIZE,
 };
 
@@ -71,13 +71,15 @@ fn main() -> std::result::Result<(), Box<dyn Error>> {
     let addr = cli.addr;
     info!("kvs-server {}", env!("CARGO_PKG_VERSION"));
     info!("Storage engine: {:?}", engine);
-    // ignore sled for now
-    run(addr)?;
+    match engine {
+        Engine::Kvs => run_with_engine(KvStore::default(), addr)?,
+        Engine::Sled => run_with_engine(SledKvsEngine::default(), addr)?,
+    };
     Ok(())
 }
 
-fn run(addr: String) -> Result<()> {
-    let kvs = Arc::new(KvStore::default());
+fn run_with_engine<E: KvsEngine>(engine: E, addr: String) -> Result<()> {
+    let kvs = Arc::new(engine);
     let listener = TcpListener::bind(&addr)?;
     info!("Listening on {}", addr);
     for stream in listener.incoming() {
