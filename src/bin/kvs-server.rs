@@ -4,6 +4,7 @@ use std::{
     io::{self, Read, Write},
     net::{TcpListener, TcpStream},
     str::from_utf8,
+    sync::Arc,
 };
 
 use clap::{Parser, ValueEnum};
@@ -11,7 +12,7 @@ use log::info;
 use serde::{Deserialize, Serialize};
 use trash_db::{
     commands::{KvsCommands, KvsResponse},
-    engines::{kvstore::KvStore, sled::SledKvsEngine, KvsEngine},
+    engines::{kvstore::KvStore, KvsEngine},
     KvError, Result, MESSAGE_SIZE,
 };
 
@@ -70,16 +71,18 @@ fn main() -> std::result::Result<(), Box<dyn Error>> {
     let addr = cli.addr;
     info!("kvs-server {}", env!("CARGO_PKG_VERSION"));
     info!("Storage engine: {:?}", engine);
+    // ignore sled for now
+    run(addr)?;
+    Ok(())
+}
+
+fn run(addr: String) -> Result<()> {
+    let kvs = Arc::new(KvStore::default());
     let listener = TcpListener::bind(&addr)?;
     info!("Listening on {}", addr);
-    let mut kvs: Box<dyn KvsEngine> = if engine == Engine::Sled {
-        Box::new(SledKvsEngine::default())
-    } else {
-        Box::new(KvStore::default())
-    };
     for stream in listener.incoming() {
-        let mut stream = stream.unwrap();
         info!("Connection established");
+        let mut stream = stream.unwrap();
         let command = get_command(&mut stream)?;
         info!("Command: {:?}", command);
         let response = match command {
@@ -105,6 +108,7 @@ fn main() -> std::result::Result<(), Box<dyn Error>> {
     info!("Connection closed");
     Ok(())
 }
+
 fn get_command(stream: &mut TcpStream) -> Result<KvsCommands> {
     let mut buffer = vec![];
     let mut bytes = [0; MESSAGE_SIZE];
