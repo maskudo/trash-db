@@ -4,7 +4,6 @@ use std::{
     io::{self, Read, Write},
     net::{TcpListener, TcpStream},
     str::from_utf8,
-    sync::Arc,
 };
 
 use clap::{Parser, ValueEnum};
@@ -13,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use trash_db::{
     commands::{KvsCommands, KvsResponse},
     engines::{kvstore::KvStore, sled::SledKvsEngine, KvsEngine},
+    thread_pool::{naive::NaiveThreadPool, ThreadPool},
     KvError, Result, MESSAGE_SIZE,
 };
 
@@ -79,35 +79,44 @@ fn main() -> std::result::Result<(), Box<dyn Error>> {
 }
 
 fn run_with_engine<E: KvsEngine>(engine: E, addr: String) -> Result<()> {
-    let kvs = Arc::new(engine);
+    let kvs = engine;
     let listener = TcpListener::bind(&addr)?;
+    let thread_poool = NaiveThreadPool::new(8)?;
     info!("Listening on {}", addr);
     for stream in listener.incoming() {
         info!("Connection established");
-        let mut stream = stream.unwrap();
-        let command = get_command(&mut stream)?;
-        info!("Command: {:?}", command);
-        let response = match command {
-            KvsCommands::Get { key } => match kvs.get(key.to_owned())? {
-                Some(val) => KvsResponse::Ok(Some(val)),
-                None => KvsResponse::Err(KvError::KeyNotFound.to_string()),
-            },
-            KvsCommands::Set { key, value } => match kvs.set(key.clone(), value.clone()) {
-                Ok(()) => KvsResponse::Ok(None),
-                Err(e) => KvsResponse::Err(e.to_string()),
-            },
-            KvsCommands::Rm { key } => match kvs.remove(key.clone()) {
-                Ok(()) => KvsResponse::Ok(None),
-                Err(e) => KvsResponse::Err(e.to_string()),
-            },
-        };
-        stream
-            .write_all(serde_json::to_string(&response).unwrap().as_bytes())
-            .unwrap();
-        stream.flush().unwrap();
-        stream.shutdown(std::net::Shutdown::Both)?;
+        let stream = stream.unwrap();
+        let kvs = kvs.clone();
+        thread_poool.spawn(move || {
+            handle_connection(kvs, stream).unwrap();
+        })
     }
     info!("Connection closed");
+    Ok(())
+}
+
+fn handle_connection<E: KvsEngine>(kvs: E, mut stream: TcpStream) -> crate::Result<()> {
+    let command = get_command(&mut stream)?;
+    info!("Command: {:?}", command);
+    let response = match command {
+        KvsCommands::Get { key } => match kvs.get(key.to_owned())? {
+            Some(val) => KvsResponse::Ok(Some(val)),
+            None => KvsResponse::Err(KvError::KeyNotFound.to_string()),
+        },
+        KvsCommands::Set { key, value } => match kvs.set(key.clone(), value.clone()) {
+            Ok(()) => KvsResponse::Ok(None),
+            Err(e) => KvsResponse::Err(e.to_string()),
+        },
+        KvsCommands::Rm { key } => match kvs.remove(key.clone()) {
+            Ok(()) => KvsResponse::Ok(None),
+            Err(e) => KvsResponse::Err(e.to_string()),
+        },
+    };
+    stream
+        .write_all(serde_json::to_string(&response).unwrap().as_bytes())
+        .unwrap();
+    stream.flush().unwrap();
+    stream.shutdown(std::net::Shutdown::Both)?;
     Ok(())
 }
 
