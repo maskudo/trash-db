@@ -81,7 +81,7 @@ fn main() -> std::result::Result<(), Box<dyn Error>> {
 fn run_with_engine<E: KvsEngine>(engine: E, addr: String) -> Result<()> {
     let kvs = engine;
     let listener = TcpListener::bind(&addr)?;
-    let thread_poool = NaiveThreadPool::new(8)?;
+    let thread_poool = NaiveThreadPool::new(num_cpus::get())?;
     info!("Listening on {}", addr);
     for stream in listener.incoming() {
         info!("Connection established");
