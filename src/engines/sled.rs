@@ -30,7 +30,7 @@ impl KvsEngine for SledKvsEngine {
 }
 
 impl SledKvsEngine {
-    fn open(path: impl Into<PathBuf>) -> crate::Result<Self> {
+    pub fn open(path: impl Into<PathBuf>) -> crate::Result<Self> {
         Ok(SledKvsEngine(sled::open(path.into())?))
     }
 }
