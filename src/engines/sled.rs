@@ -7,7 +7,7 @@ use std::{env, path::PathBuf};
 pub struct SledKvsEngine(Db);
 
 impl KvsEngine for SledKvsEngine {
-    fn get(&mut self, key: String) -> crate::Result<Option<String>> {
+    fn get(&self, key: String) -> crate::Result<Option<String>> {
         let tree = &self.0;
         Ok(tree
             .get(key)?
@@ -15,13 +15,13 @@ impl KvsEngine for SledKvsEngine {
             .map(String::from_utf8)
             .transpose()?)
     }
-    fn set(&mut self, key: String, value: String) -> crate::Result<()> {
+    fn set(&self, key: String, value: String) -> crate::Result<()> {
         let tree = &self.0;
         tree.insert(key, value.into_bytes()).map(|_| ())?;
         tree.flush()?;
         Ok(())
     }
-    fn remove(&mut self, key: String) -> crate::Result<()> {
+    fn remove(&self, key: String) -> crate::Result<()> {
         let tree = &self.0;
         tree.remove(key)?.ok_or(KvError::KeyNotFound)?;
         tree.flush()?;

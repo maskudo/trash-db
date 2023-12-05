@@ -1,4 +1,7 @@
+use super::KvsEngine;
+use crate::KvError;
 use crate::Result;
+use std::sync::RwLock;
 use std::{
     borrow::BorrowMut,
     collections::HashMap,
@@ -6,18 +9,25 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
-use crate::KvError;
-
-use super::KvsEngine;
 const COMPACTION_THRESHOLD: u64 = 1024 * 1024;
+
 #[derive(Debug)]
 pub struct KvStore {
-    store: HashMap<String, CommandPos>,
+    store: Arc<RwLock<HashMap<String, CommandPos>>>,
     path: PathBuf,
-    writer: BufWriter<File>,
-    stale_bytes: u64,
+    write_agent: Arc<Mutex<WriteAgent>>,
+}
+impl Clone for KvStore {
+    fn clone(&self) -> Self {
+        Self {
+            store: self.store.clone(),
+            path: self.path.clone(),
+            write_agent: self.write_agent.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -43,35 +53,13 @@ impl Default for KvStore {
 }
 
 impl KvsEngine for KvStore {
-    fn set(&mut self, key: String, value: String) -> Result<()> {
-        let writer = &mut self.writer;
-        let current_pos = writer
-            .seek(SeekFrom::End(0))
-            .expect("Error getting current writer position");
-        let key_bytes = key.as_bytes();
-        let value_bytes = value.as_bytes();
-        let key_length = key_bytes.len() as u32;
-        let value_length = value_bytes.len() as u32;
-        writer.write_all(&key_length.to_le_bytes())?;
-        writer.write_all(&value_length.to_le_bytes())?;
-        writer.write_all(key_bytes)?;
-        writer.write_all(value_bytes)?;
-        writer.flush()?;
-        let res = self.store.insert(
-            key.clone(),
-            CommandPos::new(current_pos, key_length as u64 + value_length as u64 + 8u64),
-        );
-        if let Some(value) = res {
-            self.stale_bytes += value.len + key_length as u64 + 4 + 4;
-        }
-        if self.stale_bytes >= COMPACTION_THRESHOLD {
-            self.compact()?;
-        }
-        Ok(())
+    fn set(&self, key: String, value: String) -> Result<()> {
+        self.write_agent.lock().unwrap().set(key, value)
     }
 
-    fn get(&mut self, key: String) -> Result<Option<String>> {
-        let pos = self.store.get(&key);
+    fn get(&self, key: String) -> Result<Option<String>> {
+        let r = self.store.read().unwrap();
+        let pos = r.get(&key);
         match pos {
             None => Ok(None),
             Some(&pos) => {
@@ -98,32 +86,15 @@ impl KvsEngine for KvStore {
         }
     }
 
-    fn remove(&mut self, key: String) -> Result<()> {
-        let value = self.store.get(&key);
-        if value.is_none() {
-            // println!("{}", KvError::KeyNotFound);
-            return Err(From::from(KvError::KeyNotFound));
-        }
-        let writer = &mut self.writer;
-        let key_bytes = key.as_bytes();
-        let key_length = key_bytes.len() as u32;
-        writer.write_all(&key_length.to_le_bytes())?;
-        writer.write_all(&0u32.to_le_bytes())?;
-        writer.write_all(key_bytes)?;
-        writer.flush()?;
-        self.stale_bytes += key_bytes.len() as u64 + value.unwrap().len + 4 + 4;
-        if self.stale_bytes >= COMPACTION_THRESHOLD {
-            self.compact()?;
-        }
-        self.store.remove(&key);
-        Ok(())
+    fn remove(&self, key: String) -> Result<()> {
+        self.write_agent.lock().unwrap().remove(key)
     }
 }
 
 impl KvStore {
     pub fn open(path: &Path) -> Result<Self> {
         let mut pathbuf = PathBuf::from(path);
-        pathbuf.push("store");
+        pathbuf.push(".store");
         let file = File::open(&pathbuf);
         let mut hashmap: HashMap<String, CommandPos> = HashMap::default();
         let mut stale_bytes = 0;
@@ -177,18 +148,84 @@ impl KvStore {
             }
             Err(_) => HashMap::default(),
         };
+        let store = Arc::new(RwLock::new(content));
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(pathbuf.as_path())?;
         let writer = BufWriter::new(file);
-
-        Ok(KvStore {
-            store: content,
-            path: pathbuf,
+        let writer = WriteAgent {
+            index: store.clone(),
             writer,
             stale_bytes,
+            path: pathbuf.clone(),
+        };
+        let writer = Arc::new(Mutex::new(writer));
+        Ok(KvStore {
+            store: store.clone(),
+            path: pathbuf,
+            write_agent: writer,
         })
+    }
+}
+
+#[derive(Debug)]
+struct WriteAgent {
+    index: Arc<RwLock<HashMap<String, CommandPos>>>,
+    path: PathBuf,
+    writer: BufWriter<File>,
+    stale_bytes: u64,
+}
+
+impl WriteAgent {
+    pub fn set(&mut self, key: String, value: String) -> crate::Result<()> {
+        let writer = &mut self.writer;
+        let current_pos = writer
+            .seek(SeekFrom::End(0))
+            .expect("Error getting current writer position");
+        let key_bytes = key.as_bytes();
+        let value_bytes = value.as_bytes();
+        let key_length = key_bytes.len() as u32;
+        let value_length = value_bytes.len() as u32;
+        writer.write_all(&key_length.to_le_bytes())?;
+        writer.write_all(&value_length.to_le_bytes())?;
+        writer.write_all(key_bytes)?;
+        writer.write_all(value_bytes)?;
+        writer.flush()?;
+        let res = self.index.write().unwrap().insert(
+            key.clone(),
+            CommandPos::new(current_pos, key_length as u64 + value_length as u64 + 8u64),
+        );
+        if let Some(value) = res {
+            self.stale_bytes += value.len + key_length as u64 + 4 + 4;
+        }
+        if self.stale_bytes >= COMPACTION_THRESHOLD {
+            self.compact()?;
+        }
+        Ok(())
+    }
+
+    pub fn remove(&mut self, key: String) -> crate::Result<()> {
+        let r = self.index.read().unwrap();
+        let value = r.get(&key);
+        if value.is_none() {
+            // println!("{}", KvError::KeyNotFound);
+            return Err(From::from(KvError::KeyNotFound));
+        }
+        let writer = &mut self.writer;
+        let key_bytes = key.as_bytes();
+        let key_length = key_bytes.len() as u32;
+        writer.write_all(&key_length.to_le_bytes())?;
+        writer.write_all(&0u32.to_le_bytes())?;
+        writer.write_all(key_bytes)?;
+        writer.flush()?;
+        self.stale_bytes += key_bytes.len() as u64 + value.unwrap().len + 4 + 4;
+        drop(r);
+        if self.stale_bytes >= COMPACTION_THRESHOLD {
+            self.compact()?;
+        }
+        self.index.write().unwrap().remove(&key);
+        Ok(())
     }
 
     fn compact(&mut self) -> Result<()> {
@@ -200,7 +237,7 @@ impl KvStore {
 
         let mut writer = BufWriter::new(temp_file);
         let mut reader = BufReader::new(file);
-        for item in self.store.values_mut() {
+        for item in self.index.write().unwrap().values_mut() {
             reader.borrow_mut().seek(SeekFrom::Start(item.pos))?;
             let mut bytes = vec![0u8; item.len as usize];
             reader.borrow_mut().take(item.len).read_exact(&mut bytes)?;
