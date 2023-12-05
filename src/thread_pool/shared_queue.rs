@@ -1,15 +1,17 @@
+use super::ThreadPool;
+use log::error;
 use std::{
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        mpsc::{self, Receiver},
+        Arc, Mutex,
+    },
     thread::{self},
 };
-
-use super::ThreadPool;
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
 pub struct SharedQueueThreadPool {
-    workers: Vec<Worker>,
-    sender: Option<mpsc::Sender<Job>>,
+    sender: mpsc::Sender<Job>,
 }
 
 impl ThreadPool for SharedQueueThreadPool {
@@ -20,60 +22,40 @@ impl ThreadPool for SharedQueueThreadPool {
         assert!(n > 0);
         let (sender, receiver) = mpsc::channel();
         let receiver = Arc::new(Mutex::new(receiver));
-        let mut workers = Vec::with_capacity(n);
-        for i in 0..n {
-            workers.push(Worker::new(i, receiver.clone()));
+        for _ in 0..n {
+            let worker = Worker(receiver.clone());
+            thread::spawn(move || run_task(worker));
         }
-        Ok(SharedQueueThreadPool {
-            workers,
-            sender: Some(sender),
-        })
+        Ok(Self { sender })
     }
     fn spawn<F>(&self, job: F)
     where
         F: FnOnce() + Send + 'static,
     {
         let job = Box::new(job);
-        self.sender.as_ref().unwrap().send(job).unwrap();
+        self.sender.send(job).unwrap();
     }
 }
 
-impl Drop for SharedQueueThreadPool {
+fn run_task(worker: Worker) {
+    loop {
+        let job = worker.0.lock().unwrap().recv();
+        match job {
+            Ok(job) => job(),
+            Err(e) => {
+                error!("{}", e);
+            }
+        }
+    }
+}
+
+impl Drop for Worker {
     fn drop(&mut self) {
-        drop(self.sender.take());
-        for worker in &mut self.workers {
-            if let Some(thread) = worker.thread.take() {
-                if let Err(e) = thread.join() {
-                    println!("{:?}", e);
-                };
-            }
+        if thread::panicking() {
+            let receiver = self.0.clone();
+            thread::spawn(move || run_task(Worker(receiver)));
         }
     }
 }
 
-struct Worker {
-    _id: usize,
-    thread: Option<thread::JoinHandle<()>>,
-}
-
-impl Worker {
-    fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Self {
-        let thread = thread::spawn(move || loop {
-            let message = receiver.lock().unwrap().recv();
-            match message {
-                Ok(job) => {
-                    // job might panic
-                    // catch_unwind(move || job());
-                    job();
-                }
-                Err(_) => {
-                    break;
-                }
-            }
-        });
-        Worker {
-            _id: id,
-            thread: Some(thread),
-        }
-    }
-}
+struct Worker(Arc<Mutex<Receiver<Job>>>);
