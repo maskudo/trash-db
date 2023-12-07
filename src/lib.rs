@@ -1,6 +1,8 @@
 use std::{error::Error, fmt::Display};
+pub mod client;
 pub mod commands;
 pub mod engines;
+pub mod server;
 pub mod thread_pool;
 
 pub const MESSAGE_SIZE: usize = 512;
